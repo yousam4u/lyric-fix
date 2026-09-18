@@ -55,8 +55,8 @@ st.subheader("② 일괄 규칙 (선택)")
 c1, c2 = st.columns([3, 1])
 with c1:
     rules_text = st.text_area(
-        "한 줄에 `원본=수정` — 같은 오타가 반복될 때. 음절 수가 같아야 해요.",
-        placeholder="마상가고=마산가고\n탈이=타리\n조아=초아",
+        "한 줄에 `원본=수정` — 같은 오타가 반복될 때. 음절 수가 같아야 해요. (예: `마상가고=마산가고`)",
+        placeholder="여기에 직접 입력하세요. 회색 글씨는 입력이 아니에요.",
         height=110, key=f"{fhash}_rules")
 with c2:
     st.write("")
@@ -64,20 +64,30 @@ with c2:
     if st.button("규칙을 편집 칸에 반영", use_container_width=True):
         try:
             rules = engine.parse_rules(rules_text)
-            n_hit = 0
-            for p, d in enumerate(det):
-                for r, row in enumerate(d["rows"]):
-                    new = engine.apply_rules(row["text"], rules)
-                    if new != row["text"]:
-                        st.session_state[f"{fhash}_{p}_{r}"] = new; n_hit += 1
-            st.toast(f"{n_hit}개 행에 반영됐어요")
+            if not rules:
+                st.session_state["rules_msg"] = ("warning", "규칙 칸이 비어 있어요. 왼쪽 칸에 `원본=수정`을 한 줄씩 입력한 뒤 눌러주세요.")
+            else:
+                n_hit = 0
+                for p, d in enumerate(det):
+                    for r, row in enumerate(d["rows"]):
+                        new = engine.apply_rules(row["text"], rules)
+                        if new != row["text"]:
+                            st.session_state[f"{fhash}_{p}_{r}"] = new; n_hit += 1
+                if n_hit:
+                    st.session_state["rules_msg"] = ("success", f"{n_hit}개 행에 반영했어요. 아래 ③에서 바뀐 글자를 확인하세요.")
+                else:
+                    st.session_state["rules_msg"] = ("warning", "일치하는 행이 없어요. 규칙의 '원본'은 아래 ③에 인식된 글자와 똑같아야 해요 (띄어쓰기 없이).")
         except ValueError as e:
-            st.error(str(e))
+            st.session_state["rules_msg"] = ("error", str(e))
     if st.button("원본으로 되돌리기", use_container_width=True):
         for p, d in enumerate(det):
             for r, row in enumerate(d["rows"]):
                 st.session_state[f"{fhash}_{p}_{r}"] = row["text"]
         st.session_state["preview"] = st.session_state["result"] = None
+        st.session_state["rules_msg"] = ("info", "모든 행을 인식 원본으로 되돌렸어요.")
+msg = st.session_state.pop("rules_msg", None)
+if msg:
+    getattr(st, msg[0])(msg[1])
 st.caption("⚠️ 한 글자 규칙(`상=산`)은 다른 단어(세상→세산)까지 바꿔요. 앞뒤 글자를 붙여 쓰세요.")
 
 # ---------- ③ 행별 편집 ----------
