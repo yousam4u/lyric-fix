@@ -3,21 +3,83 @@ import hashlib, os
 import streamlit as st
 import engine
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 
 st.set_page_config(page_title="악보 가사 수정기", page_icon="🎼", layout="wide",
                    initial_sidebar_state="collapsed")
-# 모바일 친화 CSS: 상단 여백 축소, 툴바 숨김, 버튼·입력 터치 크기 확대
+# 디자인 시스템: 아이스블루 그라데이션 · 알약 버튼 · 소프트 섀도 카드 (참조: voice-AI coach UI)
 st.markdown("""
 <style>
-  .block-container { padding-top: 1.2rem; padding-bottom: 3rem; }
-  [data-testid="stToolbar"], #MainMenu, footer { visibility: hidden; height: 0; }
-  .stButton > button, .stDownloadButton > button { min-height: 3rem; font-size: 1.05rem; }
-  .stTextInput input, .stTextArea textarea { font-size: 1.05rem; }
-  @media (max-width: 640px) {
-    h1 { font-size: 1.6rem !important; }
-    h3 { font-size: 1.15rem !important; }
-    .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
+  :root{
+    --blue:#4A7DFF; --blue-soft:#A7C4FF; --ink:#171B26; --ink-2:#5A6475;
+    --card:#FFFFFF; --shadow:0 10px 30px rgba(74,125,255,.10), 0 2px 8px rgba(23,27,38,.06);
+  }
+  .stApp{
+    background:
+      radial-gradient(1200px 500px at 15% -5%, rgba(167,196,255,.45), transparent 60%),
+      radial-gradient(1000px 600px at 105% 10%, rgba(202,222,255,.5), transparent 55%),
+      linear-gradient(180deg,#F6F9FF 0%,#EFF4FE 100%);
+  }
+  .block-container{ padding-top:1.1rem; padding-bottom:3rem; max-width:1150px; }
+  [data-testid="stToolbar"], #MainMenu, footer{ visibility:hidden; height:0; }
+
+  /* ── 히어로 ── */
+  .hero{ display:flex; align-items:center; gap:20px; padding:26px 30px; margin-bottom:6px;
+         background:rgba(255,255,255,.65); backdrop-filter:blur(8px);
+         border:1px solid rgba(255,255,255,.9); border-radius:28px; box-shadow:var(--shadow); }
+  .orb{ position:relative; flex:0 0 74px; width:74px; height:74px; border-radius:50%;
+        background:radial-gradient(circle at 32% 26%, #CFE0FF 0%, #7AA3FF 45%, #4A7DFF 78%, #3B67E8 100%);
+        box-shadow:0 16px 34px rgba(74,125,255,.45), inset 0 -8px 18px rgba(30,60,160,.25); }
+  .orb::before,.orb::after{ content:""; position:absolute; top:30px; width:16px; height:13px;
+        background:#fff; border-radius:52% 48% 60% 40%; opacity:.95; }
+  .orb::before{ left:16px; transform:rotate(-14deg); }
+  .orb::after{ right:16px; transform:rotate(14deg); }
+  .hero h1{ font-size:1.75rem; font-weight:800; letter-spacing:-.02em; color:var(--ink); margin:0 0 4px; }
+  .hero p{ margin:0; color:var(--ink-2); font-size:.98rem; }
+
+  /* ── 탭: 알약 세그먼트 ── */
+  [data-testid="stTabs"] [role="tablist"]{ gap:8px; border-bottom:none; background:rgba(255,255,255,.6);
+        padding:6px; border-radius:999px; width:fit-content; box-shadow:var(--shadow); }
+  [data-testid="stTabs"] [data-testid="stTab"]{ border-radius:999px !important; padding:7px 18px;
+        color:var(--ink-2); font-weight:600; }
+  [data-testid="stTabs"] [data-testid="stTab"][aria-selected="true"]{ background:var(--ink) !important; }
+  [data-testid="stTabs"] [data-testid="stTab"][aria-selected="true"] p{ color:#fff !important; }
+  .react-aria-SelectionIndicator, div[data-baseweb="tab-highlight"], div[data-baseweb="tab-border"]{ display:none !important; }
+
+  /* ── 카드류: 업로더·익스팬더·카메라 ── */
+  [data-testid="stFileUploaderDropzone"]{ background:var(--card); border:1.5px dashed var(--blue-soft);
+        border-radius:22px; box-shadow:var(--shadow); }
+  [data-testid="stExpander"] details{ background:var(--card); border:1px solid #E8EEFB;
+        border-radius:20px; box-shadow:var(--shadow); overflow:hidden; }
+  [data-testid="stAlert"]{ border-radius:18px; border:none; box-shadow:var(--shadow); }
+
+  /* ── 버튼: 알약 ── */
+  .stButton>button, .stDownloadButton>button, [data-testid="stCameraInput"] button{
+        border-radius:999px !important; min-height:3rem; font-size:1.02rem; font-weight:700;
+        border:1px solid #E4EAF7; background:var(--card); color:var(--ink); box-shadow:var(--shadow);
+        transition:transform .08s ease; }
+  .stButton>button:hover, .stDownloadButton>button:hover{ transform:translateY(-1px); border-color:var(--blue-soft); color:var(--ink); }
+  .stButton>button[kind="primary"], .stDownloadButton>button[kind="primary"],
+  [data-testid="stBaseButton-primary"]{
+        background:var(--ink) !important; color:#fff !important; border:none !important; }
+  .stButton>button[kind="primary"]:hover{ background:#232838 !important; color:#fff !important; }
+
+  /* ── 입력 ── */
+  .stTextInput input{ border-radius:14px; font-size:1.03rem; background:var(--card); border:1px solid #E4EAF7; }
+  .stTextInput input:focus{ border-color:var(--blue); box-shadow:0 0 0 3px rgba(74,125,255,.18); }
+  .stTextArea textarea{ border-radius:16px; font-size:1.0rem; background:var(--card); border:1px solid #E4EAF7; }
+  h3{ letter-spacing:-.01em; }
+
+  /* ── 사이드바 ── */
+  [data-testid="stSidebar"]{ background:rgba(255,255,255,.85); backdrop-filter:blur(10px); }
+
+  @media (max-width:640px){
+    .hero{ padding:18px 18px; gap:14px; border-radius:22px; }
+    .hero h1{ font-size:1.28rem; } .hero p{ font-size:.88rem; }
+    .orb{ flex-basis:56px; width:56px; height:56px; }
+    .orb::before,.orb::after{ top:22px; width:12px; height:10px; }
+    .orb::before{ left:12px; } .orb::after{ right:12px; }
+    .block-container{ padding-left:.8rem; padding-right:.8rem; }
   }
 </style>
 """, unsafe_allow_html=True)
@@ -264,8 +326,15 @@ def render_editor():
         for i, o in enumerate(st.session_state["preview"]):
             st.image(o, caption=f"{i + 1}페이지 (미리보기)", use_container_width=True)
 
-st.title("악보 가사 수정기")
-st.caption("악보의 음표·코드·기호는 그대로 두고, 잘못된 가사 글자만 같은 자리에 다시 씁니다.")
+st.markdown("""
+<div class="hero">
+  <div class="orb"></div>
+  <div>
+    <h1>악보 가사, 콕 집어 고쳐드려요</h1>
+    <p>음표·코드·기호는 그대로 — 잘못된 가사 글자만 같은 자리에 다시 씁니다. 악보를 올려보세요.</p>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 tab_edit, tab_help = st.tabs(["🎼 편집기", "❓ 도움말"])
 with tab_help:
     render_help()
