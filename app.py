@@ -23,6 +23,15 @@ with st.sidebar:
         dpi = st.select_slider("해상도(dpi)", options=[200, 300, 400], value=300,
                                help="인식이 안 되는 행이 있으면 400으로")
 
+EXAMPLE_RULES = (
+    "# 예시: 마산가고파 로타리 (긴 규칙 먼저, 음절 수 동일)\n"
+    "마상가고바로탈이=마산가고파로타리\n"
+    "마상가고바로=마산가고파로\n"
+    "탈이=타리\n"
+    "바로=파로\n"
+    "조아=초아"
+)
+
 st.title("악보 가사 수정기")
 st.caption("악보의 음표·코드·기호는 그대로 두고, 잘못된 가사 글자만 같은 자리에 다시 씁니다.")
 
@@ -41,10 +50,11 @@ if st.session_state.get("fhash") != fhash:
         det = [engine.detect_page(im, dpi) for im in images]
     st.session_state.update({"fhash": fhash, "images": images, "det": det,
                              "preview": None, "result": None})
-    # 편집 칸 초기값 = OCR 결과
+    # 편집 칸 초기값 = OCR 결과, 규칙 칸 초기값 = 예시 규칙(그대로 적용 가능)
     for p, d in enumerate(det):
         for r, row in enumerate(d["rows"]):
             st.session_state[f"{fhash}_{p}_{r}"] = row["text"]
+    st.session_state[f"{fhash}_rules"] = EXAMPLE_RULES
 
 images, det = st.session_state["images"], st.session_state["det"]
 n_rows = sum(len(d["rows"]) for d in det)
@@ -52,12 +62,17 @@ st.success(f"{len(images)}페이지 · 가사 {n_rows}행 인식")
 
 # ---------- ② 일괄 규칙 ----------
 st.subheader("② 일괄 규칙 (선택)")
+with st.expander("예시 규칙 보기 · 복사 · 그대로 넣기", expanded=False):
+    st.code(EXAMPLE_RULES, language=None)   # 오른쪽 위 아이콘으로 복사
+    if st.button("예시를 규칙 칸에 그대로 넣기"):
+        st.session_state[f"{fhash}_rules"] = EXAMPLE_RULES
+        st.session_state["rules_msg"] = ("info", "예시 규칙을 넣었어요. 「규칙을 편집 칸에 반영」을 누르세요.")
 c1, c2 = st.columns([3, 1])
 with c1:
     rules_text = st.text_area(
-        "한 줄에 `원본=수정` — 같은 오타가 반복될 때. 음절 수가 같아야 해요. (예: `마상가고=마산가고`)",
-        placeholder="여기에 직접 입력하세요. 회색 글씨는 입력이 아니에요.",
-        height=110, key=f"{fhash}_rules")
+        "한 줄에 `원본=수정` — 같은 오타가 반복될 때. 음절 수가 같아야 해요. `#` 뒤는 주석.",
+        placeholder="여기에 직접 입력하세요. 예) 마상가고=마산가고",
+        height=150, key=f"{fhash}_rules")
 with c2:
     st.write("")
     st.write("")
