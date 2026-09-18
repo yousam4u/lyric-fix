@@ -1,7 +1,14 @@
-# 악보 가사 수정기 (lyric-fix-app)
+# 🎼 악보 가사 수정기 (lyric-fix) v1.0.0
+
+**데모/배포**: Streamlit Community Cloud · **모바일 지원** · AI 모델 미사용(사용료 0)
 
 스캔 악보 PDF/이미지의 **한글 가사 오타를 음절 단위로 고치는** Streamlit 앱.
 음표·코드·기호는 픽셀 그대로 두고, 바뀌는 음절의 잉크만 지우고 같은 자리에 다시 씁니다.
+
+## 스크린샷
+| 편집 UI | 미리보기 | 모바일 | 사진 보정 |
+|---|---|---|---|
+| ![ui](screenshot_ui.png) | ![preview](screenshot_preview.png) | ![mobile](screenshot_mobile.png) | ![photo](screenshot_photo.png) |
 
 ## 사용 흐름
 1. PDF/PNG/JPG 업로드 → 가사 행 자동 인식 (페이지당 10~20초)

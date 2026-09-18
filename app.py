@@ -3,6 +3,8 @@ import hashlib, os
 import streamlit as st
 import engine
 
+APP_VERSION = "1.0.0"
+
 st.set_page_config(page_title="악보 가사 수정기", page_icon="🎼", layout="wide",
                    initial_sidebar_state="collapsed")
 # 모바일 친화 CSS: 상단 여백 축소, 툴바 숨김, 버튼·입력 터치 크기 확대
@@ -23,7 +25,7 @@ st.markdown("""
 # ---------- 사이드바 ----------
 with st.sidebar:
     st.markdown("## 🎼 악보 가사 수정기")
-    st.caption("You쌤융합교육원 by YouDefine")
+    st.caption(f"You쌤융합교육원 by YouDefine · v{APP_VERSION}")
     st.markdown(
         "**3단계**\n"
         "1. 악보 PDF/이미지 업로드\n"
@@ -122,13 +124,17 @@ def render_editor():
         return
 
     data = src.getvalue()
-    src_name = getattr(src, "name", None) or "camera.jpg"
+    src_name = getattr(src, "name", None) or "악보사진.jpg"
     fhash = hashlib.md5(data + str(dpi).encode()).hexdigest()[:10]
 
     if st.session_state.get("fhash") != fhash:
-        with st.spinner("가사 행을 찾는 중… (페이지당 10~20초)"):
-            images = engine.load_images(data, src_name, dpi)
-            det = [engine.detect_page(im, dpi) for im in images]
+        try:
+            with st.spinner("가사 행을 찾는 중… (페이지당 10~20초)"):
+                images = engine.load_images(data, src_name, dpi)
+                det = [engine.detect_page(im, dpi) for im in images]
+        except Exception:
+            st.error("파일을 여는 데 실패했어요. 손상되지 않은 PDF/이미지인지 확인하고 다시 올려주세요.")
+            return
         st.session_state.update({"fhash": fhash, "images": images, "det": det,
                                  "preview": None, "result": None})
         # 편집 칸 초기값 = OCR 결과, 규칙 칸 초기값 = 예시 규칙(그대로 적용 가능)
@@ -139,6 +145,11 @@ def render_editor():
 
     images, det = st.session_state["images"], st.session_state["det"]
     n_rows = sum(len(d["rows"]) for d in det)
+    if n_rows == 0:
+        st.warning("가사 행을 찾지 못했어요. 스캔이 흐리거나 크게 기울어진 경우예요 — "
+                   "더 선명하게(300dpi 이상) 스캔하거나, 정면에서 다시 촬영해 주세요. "
+                   "사이드바 「고급」에서 dpi 400으로 올려 재시도할 수도 있어요.")
+        return
     st.success(f"{len(images)}페이지 · 가사 {n_rows}행 인식")
     if not src_name.lower().endswith(".pdf"):
         st.caption("사진은 배경을 희게 펴고 기울기를 맞춘 보정본으로 작업해요. 결과 PDF도 보정본 기준이에요.")
@@ -260,3 +271,6 @@ with tab_help:
     render_help()
 with tab_edit:
     render_editor()
+
+st.divider()
+st.caption(f"악보 가사 수정기 v{APP_VERSION} · You쌤융합교육원 by YouDefine · AI is what YOU define · 문의 yousam4u@gmail.com")
