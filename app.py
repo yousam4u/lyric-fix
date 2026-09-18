@@ -3,7 +3,22 @@ import hashlib, os
 import streamlit as st
 import engine
 
-st.set_page_config(page_title="악보 가사 수정기", page_icon="🎼", layout="wide")
+st.set_page_config(page_title="악보 가사 수정기", page_icon="🎼", layout="wide",
+                   initial_sidebar_state="collapsed")
+# 모바일 친화 CSS: 상단 여백 축소, 툴바 숨김, 버튼·입력 터치 크기 확대
+st.markdown("""
+<style>
+  .block-container { padding-top: 1.2rem; padding-bottom: 3rem; }
+  [data-testid="stToolbar"], #MainMenu, footer { visibility: hidden; height: 0; }
+  .stButton > button, .stDownloadButton > button { min-height: 3rem; font-size: 1.05rem; }
+  .stTextInput input, .stTextArea textarea { font-size: 1.05rem; }
+  @media (max-width: 640px) {
+    h1 { font-size: 1.6rem !important; }
+    h3 { font-size: 1.15rem !important; }
+    .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
+  }
+</style>
+""", unsafe_allow_html=True)
 
 # ---------- 사이드바 ----------
 with st.sidebar:
@@ -67,6 +82,13 @@ AI 모델을 쓰지 않아서 **사용료·토큰이 전혀 들지 않아요.**
 - **수정본 PDF 만들기**: 바뀐 음절만 다시 그려요. 안 바뀐 글자는 원본 픽셀 그대로예요.
 - 결과 파일명은 `원본이름_수정.pdf`. 화면 아래에 수정된 페이지도 같이 보여줘요.
 
+### 📱 폰에서 쓰기
+- **홈 화면에 추가**하면 앱처럼 아이콘으로 열려요.
+  iPhone: Safari 하단 **공유(□↑) → 홈 화면에 추가** · Android: Chrome **⋮ → 홈 화면에 추가**
+- 업로드 칸을 누르면 **사진 촬영 / 앨범 / 파일** 중에 고를 수 있고, 「📷 카메라로 찍기」로 바로 찍어도 돼요.
+- **촬영 팁**: 정면에서, 페이지 전체가 들어오게, 그림자 없이. 그늘·누런 종이·약간의 기울기는 자동 보정되지만 심하게 비스듬한 사진은 글자를 놓칠 수 있어요.
+- 사진은 스캔보다 인식 누락이 조금 있을 수 있어요. 빠진 글자는 ③ 행 편집 칸에서 확인하세요 (글자 수가 안 맞으면 그 행은 규칙이 안 먹을 수 있어요).
+
 ### 자주 묻는 질문
 - **인식이 왜 오래 걸리나요?** 300dpi 이미지를 글자 단위로 읽어요. 파일당 한 번만 걸리고, 이후 편집·미리보기는 바로 돼요.
 - **글자를 추가하거나 빼고 싶어요.** 이 앱은 음절 수를 유지하는 교체만 해요. 글자 수가 달라지는 수정은 악보 프로그램(MuseScore 등)에서 하세요.
@@ -88,17 +110,24 @@ AI 모델을 쓰지 않아서 **사용료·토큰이 전혀 들지 않아요.**
 
 def render_editor():
     # ---------- ① 업로드 & 인식 ----------
-    up = st.file_uploader("악보 파일 (PDF · PNG · JPG)", type=["pdf", "png", "jpg", "jpeg"])
-    if not up:
-        st.info("악보 파일을 올리면 가사 행을 자동으로 찾아 편집 칸을 만들어 드려요.")
+    up = st.file_uploader("악보 파일 (PDF · PNG · JPG) — 폰에서는 여기서 바로 '사진 촬영'도 골라져요",
+                          type=["pdf", "png", "jpg", "jpeg"])
+    shot = None
+    with st.expander("📷 카메라로 찍기 (폰)", expanded=False):
+        st.caption("악보를 정면에서 평평하게, 페이지 전체가 들어오게 찍으세요. 그늘·기울기는 자동 보정돼요.")
+        shot = st.camera_input("촬영", label_visibility="collapsed")
+    src = up or shot
+    if not src:
+        st.info("악보 파일을 올리거나 사진을 찍으면 가사 행을 자동으로 찾아 편집 칸을 만들어 드려요.")
         return
 
-    data = up.getvalue()
+    data = src.getvalue()
+    src_name = getattr(src, "name", None) or "camera.jpg"
     fhash = hashlib.md5(data + str(dpi).encode()).hexdigest()[:10]
 
     if st.session_state.get("fhash") != fhash:
         with st.spinner("가사 행을 찾는 중… (페이지당 10~20초)"):
-            images = engine.load_images(data, up.name, dpi)
+            images = engine.load_images(data, src_name, dpi)
             det = [engine.detect_page(im, dpi) for im in images]
         st.session_state.update({"fhash": fhash, "images": images, "det": det,
                                  "preview": None, "result": None})
@@ -111,6 +140,8 @@ def render_editor():
     images, det = st.session_state["images"], st.session_state["det"]
     n_rows = sum(len(d["rows"]) for d in det)
     st.success(f"{len(images)}페이지 · 가사 {n_rows}행 인식")
+    if not src_name.lower().endswith(".pdf"):
+        st.caption("사진은 배경을 희게 펴고 기울기를 맞춘 보정본으로 작업해요. 결과 PDF도 보정본 기준이에요.")
 
     # ---------- ② 일괄 규칙 ----------
     st.subheader("② 일괄 규칙 (선택)")
@@ -197,21 +228,21 @@ def render_editor():
 
     if do_preview:
         with st.spinner("미리보기 생성 중…"):
-            st.session_state["preview"] = [engine.render_page(im, d["rows"], nt, dpi, preview=True)[0]
+            st.session_state["preview"] = [engine.render_page(im, d["rows"], nt, dpi, preview=True, scale=d.get("scale"))[0]
                                            for im, d, nt in zip(images, det, new_texts)]
             st.session_state["result"] = None
     if do_apply:
         with st.spinner("가사를 다시 쓰는 중…"):
             outs, n = [], 0
             for im, d, nt in zip(images, det, new_texts):
-                o, ch = engine.render_page(im, d["rows"], nt, dpi)
+                o, ch = engine.render_page(im, d["rows"], nt, dpi, scale=d.get("scale"))
                 outs.append(o); n += len(ch)
             st.session_state["result"] = (outs, engine.to_pdf_bytes(outs, dpi), n)
             st.session_state["preview"] = None
 
     if st.session_state.get("result"):
         outs, pdf, n = st.session_state["result"]
-        stem = os.path.splitext(up.name)[0]
+        stem = os.path.splitext(src_name)[0]
         st.success(f"음절 {n}개를 고쳤어요.")
         st.download_button("⬇️ 수정본 PDF 다운로드", pdf, file_name=f"{stem}_수정.pdf",
                            mime="application/pdf", type="primary")

@@ -35,6 +35,51 @@ def find_font():
     raise RuntimeError("한글 폰트를 찾지 못했습니다. fonts/NotoSansKR-Regular.ttf 를 넣어주세요.")
 
 # ---------------- 입력 ----------------
+TARGET_LONG_SIDE = 3400   # A4 300dpi 세로(3508)에 가깝게 — 사진도 이 크기로 맞춰 글자 크기를 스캔과 비슷하게
+
+def _normalize_photo(img: Image.Image) -> Image.Image:
+    """폰 사진용: EXIF 회전 반영 → 크기 맞춤 → 배경 조명 정규화(그늘 제거, 배경을 흰색으로)."""
+    from PIL import ImageOps
+    img = ImageOps.exif_transpose(img).convert("RGB")
+    long_side = max(img.size)
+    if long_side < TARGET_LONG_SIDE * 0.7 or long_side > TARGET_LONG_SIDE * 1.4:
+        r = TARGET_LONG_SIDE / long_side
+        img = img.resize((round(img.width * r), round(img.height * r)), Image.LANCZOS)
+    g = np.array(img.convert("L")).astype(np.float32)
+    # 배경 추정: 큰 커널 모폴로지 closing(글자를 지워 배경만) → 나눠서 평탄화
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (61, 61))
+    bg = cv2.morphologyEx(g, cv2.MORPH_CLOSE, k)
+    flat = np.clip(g / np.maximum(bg, 1) * 255.0, 0, 255)
+    # 대비 늘리기: 글자는 검게, 종이는 희게
+    lo, hi = np.percentile(flat, 1), np.percentile(flat, 60)
+    flat = np.clip((flat - lo) / max(hi - lo, 1) * 255.0, 0, 255).astype(np.uint8)
+    # 기울기 보정: 오선(긴 수평선)의 각도 중앙값으로 회전
+    ang = _skew_angle(flat)
+    if abs(ang) > 0.15:
+        h, w = flat.shape
+        M = cv2.getRotationMatrix2D((w / 2, h / 2), ang, 1.0)
+        flat = cv2.warpAffine(flat, M, (w, h), flags=cv2.INTER_CUBIC, borderValue=255)
+    return Image.fromarray(flat).convert("RGB")
+
+def _skew_angle(gray_u8) -> float:
+    """오선처럼 긴 수평선들의 평균 기울기(도). 못 찾으면 0."""
+    edges = cv2.Canny(gray_u8, 50, 150)
+    w = gray_u8.shape[1]
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 720, threshold=200, minLineLength=int(w * 0.25), maxLineGap=20)
+    if lines is None:
+        return 0.0
+    angs = []
+    for x1, y1, x2, y2 in lines[:, 0]:
+        a = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+        if abs(a) < 5:
+            angs.append(a)
+    return float(np.median(angs)) if len(angs) >= 5 else 0.0
+
+def is_scan_like(img: Image.Image) -> bool:
+    """배경이 이미 거의 흰색이면 스캔/디지털 악보로 본다."""
+    g = np.array(img.convert("L"))
+    return np.percentile(g, 70) >= 235
+
 def load_images(data: bytes, filename: str, dpi: int = DPI):
     ext = os.path.splitext(filename)[1].lower()
     if ext == ".pdf":
@@ -44,7 +89,12 @@ def load_images(data: bytes, filename: str, dpi: int = DPI):
             f.write(data)
         subprocess.run(["pdftoppm", "-r", str(dpi), "-png", src, os.path.join(work, "page")], check=True)
         return [Image.open(p).convert("RGB") for p in sorted(glob.glob(os.path.join(work, "page-*.png")))]
-    return [Image.open(io.BytesIO(data)).convert("RGB")]
+    img = Image.open(io.BytesIO(data))
+    from PIL import ImageOps
+    img = ImageOps.exif_transpose(img).convert("RGB")
+    if is_scan_like(img) and TARGET_LONG_SIDE * 0.7 <= max(img.size) <= TARGET_LONG_SIDE * 1.4:
+        return [img]
+    return [_normalize_photo(img)]
 
 # ---------------- 규칙 ----------------
 def parse_rules(text: str):
@@ -180,9 +230,11 @@ def _partition(groups, n, target_w, skip_cost=1.5):
 # ---------------- 검출 ----------------
 def detect_page(img: Image.Image, dpi: int = DPI):
     """가사 행과 음절별 잉크 박스를 계산한다. 결과는 JSON 직렬화 가능."""
-    s = dpi / 300.0
     gray = np.array(img.convert("L"))
     toks = _ocr_tokens(img)
+    # 글자 크기 스케일: 스캔/사진/해상도 무관하게 OCR 글자 높이 중앙값(≈47px@300dpi 기준)에서 자동 추정
+    hs = [t["h"] for t in toks if len(t["text"]) >= 2]
+    s = float(np.clip(np.median(hs) / 47.0, 0.5, 2.0)) if len(hs) >= 5 else dpi / 300.0
     rows = [r for r in _cluster_rows(toks, 25 * s) if _is_lyric_row(r, s)]
     rows.sort(key=lambda r: np.mean([t["cy"] for t in r]))
     out = []
@@ -200,7 +252,7 @@ def detect_page(img: Image.Image, dpi: int = DPI):
         out.append({"y": int(np.mean([t["cy"] for t in row])), "text": text,
                     "sylls": [[int(v) for v in b] for b in sylls] if sylls else None,
                     "ok": sylls is not None})
-    return {"rows": out}
+    return {"rows": out, "scale": round(s, 3)}
 
 # ---------------- 렌더 ----------------
 def _row_font(font_path, font_index, sylls):
@@ -213,9 +265,9 @@ def _row_font(font_path, font_index, sylls):
             return f
     return ImageFont.truetype(font_path, max(8, int(th * 0.8)), index=font_index)
 
-def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool = False):
-    """rows: detect_page 결과. new_texts: 행별 수정 문자열(원본과 길이 동일). 바뀐 음절만 처리."""
-    s = dpi / 300.0
+def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool = False, scale: float = None):
+    """rows: detect_page 결과의 rows. new_texts: 행별 수정 문자열(원본과 길이 동일). 바뀐 음절만 처리."""
+    s = scale if scale else dpi / 300.0
     font_path, font_index = find_font()
     out = img.copy()
     draw = ImageDraw.Draw(out)

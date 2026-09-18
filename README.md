@@ -8,6 +8,13 @@
 2. 행별 편집 칸에서 틀린 글자만 수정 (음절 수 유지) — 반복 오타는 「일괄 규칙」에 `원본=수정`
 3. 미리보기(빨간 박스) 확인 → 「수정본 PDF 만들기」 → 다운로드
 
+## 📱 모바일
+- 같은 주소를 폰 브라우저로 열면 1열 레이아웃으로 바뀝니다. 홈 화면에 추가하면 앱처럼 실행돼요
+  (iPhone: Safari 공유 → 홈 화면에 추가 / Android: Chrome ⋮ → 홈 화면에 추가).
+- 업로드 칸에서 사진 촬영을 고르거나 「📷 카메라로 찍기」로 바로 찍을 수 있어요.
+- 폰 사진은 자동 보정됩니다: EXIF 회전 → 크기 맞춤(긴 변 3400px) → 배경 조명 정규화(그늘 제거) → 오선 기준 기울기 보정.
+  글자 크기 스케일은 OCR 결과에서 자동 추정해 해상도에 무관하게 동작해요.
+
 ## Streamlit Community Cloud 배포
 1. 이 폴더를 GitHub 저장소로 push (`app.py`, `engine.py`, `requirements.txt`, `packages.txt`, `.streamlit/`)
 2. https://share.streamlit.io → New app → 저장소/브랜치 선택, Main file: `app.py`
