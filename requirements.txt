@@ -2,3 +2,4 @@ streamlit>=1.36
 pillow>=10
 numpy>=1.26
 opencv-python-headless>=4.9
+streamlit-image-coordinates>=0.1.9

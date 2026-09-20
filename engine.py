@@ -235,7 +235,8 @@ def detect_page(img: Image.Image, dpi: int = DPI):
     # 글자 크기 스케일: 스캔/사진/해상도 무관하게 OCR 글자 높이 중앙값(≈47px@300dpi 기준)에서 자동 추정
     hs = [t["h"] for t in toks if len(t["text"]) >= 2]
     s = float(np.clip(np.median(hs) / 47.0, 0.5, 2.0)) if len(hs) >= 5 else dpi / 300.0
-    rows = [r for r in _cluster_rows(toks, 25 * s) if _is_lyric_row(r, s)]
+    # 모든 한글 텍스트 행(2자 이상) — 가사 여부는 kind로 분류
+    rows = [r for r in _cluster_rows(toks, 25 * s) if sum(len(t["text"]) for t in r) >= 2]
     rows.sort(key=lambda r: np.mean([t["cy"] for t in r]))
     out = []
     for row in rows:
@@ -250,6 +251,7 @@ def detect_page(img: Image.Image, dpi: int = DPI):
         groups = [g for g in groups if near(g)]
         sylls = _partition(groups, len(text), target_w)
         out.append({"y": int(np.mean([t["cy"] for t in row])), "text": text,
+                    "kind": "lyric" if _is_lyric_row(row, s) else "text",
                     "tokens": [t["text"] for t in row],
                     "sylls": [[int(v) for v in b] for b in sylls] if sylls else None,
                     "ok": sylls is not None})
@@ -365,6 +367,20 @@ def row_words(row):
             words.append((text[start:i], start)); start = i
     words.append((text[start:], start))
     return words
+
+def word_boxes(row):
+    """행의 어절 목록: [{"w", "i0", "i1", "box":[x0,y0,x1,y1]}] (i1은 exclusive)"""
+    out = []
+    text, sylls = row["text"], row.get("sylls")
+    if not row.get("ok") or not sylls or len(sylls) != len(text):
+        return out
+    for w, i0 in row_words(row):
+        i1 = i0 + len(w)
+        bs = sylls[i0:i1]
+        out.append({"w": w, "i0": i0, "i1": i1,
+                    "box": [min(b[0] for b in bs), min(b[1] for b in bs),
+                            max(b[2] for b in bs), max(b[3] for b in bs)]})
+    return out
 
 def suggest_page(rows):
     """행별 표기 검사(베타). 사전에 없는 어절을 플래그하고 후보를 보여준다 — 자동 교체는 하지 않음.
