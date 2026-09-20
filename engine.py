@@ -250,6 +250,7 @@ def detect_page(img: Image.Image, dpi: int = DPI):
         groups = [g for g in groups if near(g)]
         sylls = _partition(groups, len(text), target_w)
         out.append({"y": int(np.mean([t["cy"] for t in row])), "text": text,
+                    "tokens": [t["text"] for t in row],
                     "sylls": [[int(v) for v in b] for b in sylls] if sylls else None,
                     "ok": sylls is not None})
     return {"rows": out, "scale": round(s, 3)}
@@ -318,6 +319,73 @@ def to_pdf_bytes(images, dpi: int = DPI) -> bytes:
     buf = io.BytesIO()
     images[0].save(buf, "PDF", save_all=True, append_images=images[1:], resolution=float(dpi))
     return buf.getvalue()
+
+# ---------------- 맞춤법 제안 (hunspell-ko, 선택 기능) ----------------
+def spell_available() -> bool:
+    import shutil
+    if not shutil.which("hunspell"):
+        return False
+    for d in ("/usr/share/hunspell/ko_KR.dic", "/usr/share/hunspell/ko.dic"):
+        if os.path.exists(d):
+            return True
+    return False
+
+def _hunspell_check(words):
+    """words → {word: suggestions or None}. None=사전에 있음."""
+    uniq = list(dict.fromkeys(w for w in words if len(w) >= 2))
+    if not uniq:
+        return {}
+    inp = "\n".join("^" + w for w in uniq) + "\n"   # ^ = 파이프 명령 방지
+    r = subprocess.run(["hunspell", "-d", "ko_KR", "-i", "UTF-8", "-a"],
+                       input=inp, capture_output=True, text=True)
+    res, i = {}, 0
+    for ln in r.stdout.splitlines():
+        if not ln or ln.startswith("@"):
+            continue
+        if ln[0] in "*+-":
+            res[uniq[i]] = None; i += 1
+        elif ln[0] == "&":
+            head, sugs = ln.split(":", 1)
+            res[uniq[i]] = [x.strip() for x in sugs.split(",")]; i += 1
+        elif ln[0] == "#":
+            res[uniq[i]] = []; i += 1
+        if i >= len(uniq):
+            break
+    return res
+
+def row_words(row):
+    """음절 박스 간격으로 어절을 재구성 → [(word, start_idx)]"""
+    text, sylls = row["text"], row.get("sylls")
+    if not sylls or len(sylls) != len(text):
+        return []
+    pitch = float(np.median([b[2] - b[0] for b in sylls]))
+    words, start = [], 0
+    for i in range(1, len(text)):
+        if sylls[i][0] - sylls[i - 1][2] > 0.6 * pitch:   # 어절 경계
+            words.append((text[start:i], start)); start = i
+    words.append((text[start:], start))
+    return words
+
+def suggest_page(rows):
+    """행별 표기 검사(베타). 사전에 없는 어절을 플래그하고 후보를 보여준다 — 자동 교체는 하지 않음.
+    반환: [{"notes": [str]}] (rows와 같은 길이)"""
+    per_row_words = [row_words(r) if r.get("ok") else [] for r in rows]
+    all_words = [w for ws in per_row_words for w, _ in ws if len(w) >= 2]
+    checked = _hunspell_check(all_words)
+    out = []
+    for ws in per_row_words:
+        notes = []
+        for w, _ in ws:
+            sugs = checked.get(w)
+            if not sugs:                       # 사전에 있음(None) 또는 후보 없음([])
+                continue
+            same = [x for x in sugs if " " not in x and len(x) == len(w)
+                    and sum(a != b for a, b in zip(x, w)) == 1]
+            if not same:                       # 한 글자 차이 후보가 없으면 표시 안 함 (노이즈 억제)
+                continue
+            notes.append(f"'{w}' 확인 필요 · 비슷한 말: {', '.join(same[:3])}")
+        out.append({"notes": notes})
+    return out
 
 def check_env():
     """앱 시작 시 의존 도구 점검 → 문제 목록(비어 있으면 OK)."""

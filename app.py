@@ -3,7 +3,7 @@ import hashlib, os
 import streamlit as st
 import engine
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 st.set_page_config(page_title="악보 가사 수정기", page_icon="🎼", layout="wide",
                    initial_sidebar_state="collapsed")
@@ -101,6 +101,9 @@ with st.sidebar:
     with st.expander("고급"):
         dpi = st.select_slider("해상도(dpi)", options=[200, 300, 400], value=300,
                                help="인식이 안 되는 행이 있으면 400으로")
+        spell_on = st.checkbox("🔤 표기 검사 (베타)", value=os.environ.get("LYRICFIX_SPELL_DEFAULT") == "1",
+                               help="사전에 없는 어절을 행 아래에 표시해요. 가사 조각 특성상 참고용 — 자동 수정은 하지 않아요.") \
+                   if engine.spell_available() else False
 
 EXAMPLE_RULES = (
     "# 예시: 마산가고파 로타리 (긴 규칙 먼저, 음절 수 동일)\n"
@@ -264,6 +267,20 @@ def render_editor():
     # ---------- ③ 행별 편집 ----------
     st.subheader("③ 가사 행 편집")
     st.caption("인식된 글자 중 틀린 것만 고치세요. 글자 수를 바꾸면 그 행은 통째로 다시 쓰는 자유 편집이 됩니다.")
+    spell_notes = {}
+    if spell_on:
+        sk = f"{fhash}_spell"
+        if sk not in st.session_state:
+            with st.spinner("표기 검사 중…"):
+                st.session_state[sk] = [engine.suggest_page(d["rows"]) for d in det]
+        for p_, page in enumerate(st.session_state[sk]):
+            for r_, g in enumerate(page):
+                if g["notes"]:
+                    spell_notes[(p_, r_)] = g["notes"]
+        n_flag = sum(len(v) for v in spell_notes.values())
+        if n_flag:
+            st.info(f"🔤 표기 검사: 확인이 필요해 보이는 어절 {n_flag}곳을 행 아래에 표시했어요 (참고용).")
+
     new_texts, total_changed, has_error = [], 0, False
     for p, (im, d) in enumerate(zip(images, det)):
         st.markdown(f"**{p + 1}페이지**")
@@ -289,6 +306,8 @@ def render_editor():
                         diffs = [f"{o}→{n}" for o, n in zip(row["text"], val) if o != n]
                         total_changed += len(diffs)
                         st.caption("변경 " + ", ".join(diffs))
+                for note in spell_notes.get((p, r), []):
+                    st.caption("🔤 " + note)
                 page_new.append(val)
             new_texts.append(page_new)
 
