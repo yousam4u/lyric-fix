@@ -166,6 +166,39 @@ def _is_lyric_row(row, s):
     med_h = float(np.median([t["h"] for t in row]))
     return 36 * s <= med_h <= 58 * s
 
+def _latin_tokens(img: Image.Image, min_conf=55):
+    """영문/기호 토큰(제목 부제·작곡자·튜닝·코드 등). 순수 숫자는 제외."""
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+        img.save(tf.name)
+        r = subprocess.run(["tesseract", tf.name, "stdout", "--psm", "6", "tsv"],
+                           capture_output=True, text=True)
+    os.unlink(tf.name)
+    lines = r.stdout.strip().split("\n")
+    if len(lines) < 2:
+        return []
+    header = lines[0].split("\t")
+    out = []
+    for ln in lines[1:]:
+        p = ln.split("\t")
+        if len(p) < 12:
+            continue
+        d = dict(zip(header, p))
+        txt = d.get("text", "").strip()
+        m = re.fullmatch(r"[A-Za-z][A-Za-z0-9#.'\-]*", txt)
+        if not m:
+            continue
+        try:
+            conf = float(d["conf"])
+        except ValueError:
+            continue
+        if conf < min_conf:
+            continue
+        l, t, w, h = int(d["left"]), int(d["top"]), int(d["width"]), int(d["height"])
+        if h < 8:
+            continue
+        out.append({"text": txt, "box": [l, t, l + w, t + h]})
+    return out
+
 # ---------------- 음절 기하 ----------------
 def _glyph_groups(gray, x0, y0, x1, y1, s):
     reg = (gray[y0:y1, x0:x1] < 128).astype(np.uint8)
@@ -255,7 +288,7 @@ def detect_page(img: Image.Image, dpi: int = DPI):
                     "tokens": [t["text"] for t in row],
                     "sylls": [[int(v) for v in b] for b in sylls] if sylls else None,
                     "ok": sylls is not None})
-    return {"rows": out, "scale": round(s, 3)}
+    return {"rows": out, "scale": round(s, 3), "latin": _latin_tokens(img)}
 
 # ---------------- 렌더 ----------------
 def _row_font(font_path, font_index, sylls):
@@ -268,7 +301,8 @@ def _row_font(font_path, font_index, sylls):
             return f
     return ImageFont.truetype(font_path, max(8, int(th * 0.8)), index=font_index)
 
-def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool = False, scale: float = None):
+def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool = False, scale: float = None,
+                token_edits=None):
     """rows: detect_page 결과의 rows. new_texts: 행별 수정 문자열(원본과 길이 동일). 바뀐 음절만 처리."""
     s = scale if scale else dpi / 300.0
     font_path, font_index = find_font()
@@ -315,6 +349,25 @@ def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool
                 cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
                 b = font.getbbox(n)
                 draw.text((cx - (b[2] - b[0]) / 2 - b[0], cy - (b[3] - b[1]) / 2 - b[1]), n, fill=(0, 0, 0), font=font)
+    # 영문 토큰 교체 (자유 길이): 토큰 박스를 지우고 새 텍스트를 같은 높이로 그림
+    for te in (token_edits or []):
+        x0, y0, x1, y1 = te["box"]
+        changes.append((-1, -1, te["old"], te["new"]))
+        if preview:
+            draw.rectangle([x0 - m, y0 - m, x1 + m, y1 + m], outline=(220, 30, 30), width=max(2, int(3 * s)))
+            f = ImageFont.truetype(font_path, max(10, int(22 * s)), index=font_index)
+            draw.text((x0, y1 + 3 * s), te["new"], fill=(220, 30, 30), font=f)
+            continue
+        draw.rectangle([x0 - int(4 * s), y0 - int(4 * s), x1 + int(4 * s), y1 + int(4 * s)], fill=(255, 255, 255))
+        if te["new"]:
+            fh = y1 - y0
+            for sz in range(int(fh * 1.5), 7, -1):
+                f = ImageFont.truetype(font_path, sz, index=font_index)
+                b = f.getbbox("Ag한")
+                if (b[3] - b[1]) <= fh * 1.15:
+                    break
+            b = f.getbbox(te["new"])
+            draw.text((x0 - b[0], (y0 + y1) / 2 - (b[3] - b[1]) / 2 - b[1]), te["new"], fill=(0, 0, 0), font=f)
     return out, changes
 
 def to_pdf_bytes(images, dpi: int = DPI) -> bytes:

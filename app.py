@@ -3,7 +3,7 @@ import hashlib, os
 import streamlit as st
 import engine
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 st.set_page_config(page_title="악보 가사 수정기", page_icon="🎼", layout="wide",
                    initial_sidebar_state="collapsed")
@@ -288,7 +288,7 @@ def render_editor():
 
     # ---- ③-A 클릭 편집 ----
     with tab_click:
-        st.caption("🟥 빨간 네모 = 편집할 수 있는 단어 — 클릭하면 아래에 편집 칸이 열려요 · "
+        st.caption("🟥 빨간 네모 = 편집할 수 있는 단어·영문·코드 — 클릭하면 아래에 편집 칸이 열려요 · "
                    "🟩 초록 = 수정 반영됨 · 「같은 문구 모두 바꾸기」로 반복 오타를 한 번에 처리")
         from streamlit_image_coordinates import streamlit_image_coordinates
         from PIL import ImageDraw as _ImageDraw
@@ -302,6 +302,11 @@ def render_editor():
                 for wb in engine.word_boxes(row_):
                     word_map.append({"p": p_, "r": r_, **wb,
                                      "cur": None if stale else cur[wb["i0"]:wb["i1"]]})
+        tokedits = st.session_state.setdefault(f"{fhash}_tokedits", {})
+        for p_, d_ in enumerate(det):
+            for ti, tk in enumerate(d_.get("latin", [])):
+                word_map.append({"p": p_, "r": -1, "i0": ti, "i1": -1, "w": tk["text"],
+                                 "box": tk["box"], "cur": tokedits.get((p_, ti), tk["text"]), "tok": True})
 
         sel = st.session_state.get("sel_word")
         for p_, (im_, d_) in enumerate(zip(images, det)):
@@ -316,9 +321,15 @@ def render_editor():
                     col, wd = (16, 150, 72), 5
                 else:
                     col, wd = (220, 30, 30), 3
-                if sel and (wm["p"], wm["r"], wm["i0"]) == (sel["p"], sel["r"], sel["i0"]):
+                if sel and (wm["p"], wm["r"], wm["i0"]) == (sel["p"], sel["r"], sel["i0"]) \
+                        and sel.get("tok", False) == wm.get("tok", False):
                     col, wd = (37, 99, 235), 7
                 drw.rectangle([x0 - 6, y0 - 6, x1 + 6, y1 + 6], outline=col, width=wd)
+                if wm["cur"] is not None and wm["cur"] != wm["w"]:
+                    from PIL import ImageFont as _IF
+                    fp, fi = engine.find_font()
+                    _f = _IF.truetype(fp, max(18, int((y1 - y0) * 0.8)), index=fi)
+                    drw.text((x0, max(0, y0 - (y1 - y0) - 12)), wm["cur"] or "␡", fill=(16, 150, 72), font=_f)
             disp_w = 860
             val = streamlit_image_coordinates(ann, width=disp_w, key=f"imgclick_{fhash}_{p_}")
             lk = f"lastclick_{fhash}_{p_}"
@@ -337,39 +348,65 @@ def render_editor():
                     st.session_state["sel_word"] = hit
                     st.rerun()
 
-        if sel:
+        def _apply(targets, nv):
+            n = 0
+            for wm in targets:
+                if wm.get("tok"):
+                    tokedits[(wm["p"], wm["i0"])] = nv; n += 1
+                    continue
+                key = f"{fhash}_{wm['p']}_{wm['r']}"
+                t = cur_text(wm["p"], wm["r"])
+                if len(t) != len(det[wm["p"]]["rows"][wm["r"]]["text"]):
+                    continue
+                st.session_state[key] = t[:wm["i0"]] + nv + t[wm["i1"]:]
+                n += 1
+            st.session_state["sel_word"] = None
+            st.toast(f"{n}곳에 반영했어요"); st.rerun()
+
+        @st.dialog("✏️ 단어 수정")
+        def edit_dialog():
+            sel = st.session_state.get("sel_word")
+            if not sel:
+                st.write("선택된 단어가 없어요."); return
+            is_tok = sel.get("tok", False)
             same = [wm for wm in word_map
-                    if wm["w"] == sel["w"] and wm["cur"] == sel["w"]]
-            st.markdown("---")
-            cur_v = cur_text(sel["p"], sel["r"])[sel["i0"]:sel["i1"]]
-            st.markdown(f"**선택한 단어:** `{sel['w']}`" + (f" (현재 `{cur_v}`)" if cur_v != sel["w"] else ""))
-            nv = "".join(st.text_input("바꿀 내용", value=cur_v, key=f"we_{fhash}_{sel['p']}_{sel['r']}_{sel['i0']}").split())
-            if len(nv) != sel["i1"] - sel["i0"]:
+                    if wm.get("tok", False) == is_tok and wm["w"] == sel["w"] and wm["cur"] == sel["w"]]
+            if is_tok:
+                cur_v = tokedits.get((sel["p"], sel["i0"]), sel["w"])
+            else:
+                cur_v = cur_text(sel["p"], sel["r"])[sel["i0"]:sel["i1"]]
+            st.markdown(f"**인식된 텍스트:** `{sel['w']}`" + (f"  →  현재 `{cur_v}`" if cur_v != sel["w"] else ""))
+            raw = st.text_input("수정할 텍스트", value=cur_v, key=f"we_{fhash}_{sel['p']}_{sel['r']}_{sel['i0']}")
+            nv = raw.strip() if is_tok else "".join(raw.split())
+            if is_tok:
+                st.caption("영문·코드·문구 토큰은 글자 수 제한이 없어요. 비우면 지워져요.")
+            elif len(nv) != sel["i1"] - sel["i0"]:
                 st.warning("글자 수가 달라요 — 이 단어가 있는 행은 통째로 다시 쓰는 자유 편집이 되고, 이후 그 행은 클릭 편집에서 제외돼요.")
-            def _apply(targets, nv):
-                n = 0
-                for wm in targets:
-                    key = f"{fhash}_{wm['p']}_{wm['r']}"
-                    t = cur_text(wm["p"], wm["r"])
-                    if len(t) != len(det[wm["p"]]["rows"][wm["r"]]["text"]):
-                        continue
-                    st.session_state[key] = t[:wm["i0"]] + nv + t[wm["i1"]:]
-                    n += 1
-                st.session_state["sel_word"] = None
-                st.toast(f"{n}곳에 반영했어요"); st.rerun()
-            c1, c2, c3 = st.columns([1, 1.4, 1])
+            c1, c2 = st.columns(2)
             with c1:
-                if st.button("이 단어만 바꾸기", use_container_width=True, disabled=(nv == cur_v)):
-                    _apply([sel], nv)
+                if st.button("✔ 이 단어 반영", use_container_width=True):
+                    if nv == cur_v:
+                        st.toast("바뀐 내용이 없어요")
+                    else:
+                        _apply([sel], nv)
             with c2:
-                if st.button(f"같은 문구 모두 바꾸기 ({len(same)}곳)", type="primary",
-                             use_container_width=True, disabled=(nv == sel["w"] or len(same) == 0)):
-                    _apply(same, nv)
-            with c3:
-                if st.button("선택 해제", use_container_width=True):
-                    st.session_state["sel_word"] = None; st.rerun()
+                if st.button(f"✔ 같은 문구 모두 반영 ({len(same)}곳)", type="primary", use_container_width=True):
+                    if nv == sel["w"] or not same:
+                        st.toast("바뀐 내용이 없거나 대상이 없어요")
+                    else:
+                        _apply(same, nv)
+            if st.button("닫기 (반영 안 함)", use_container_width=True):
+                st.session_state["sel_word"] = None; st.rerun()
+
+        edits_log = [(wm["w"], wm["cur"]) for wm in word_map
+                     if wm["cur"] is not None and wm["cur"] != wm["w"]]
+        if edits_log:
+            with st.expander(f"📝 수정 내역 ({len(edits_log)}건)", expanded=True):
+                st.markdown("\n".join(f"- `{o}` → **`{n or '(삭제)'}`**" for o, n in edits_log))
+        if sel:
+            edit_dialog()
         else:
-            st.info("이미지에서 빨간 네모(단어)를 클릭하세요.")
+            st.info("이미지에서 빨간 네모(단어·영문·코드)를 클릭하면 수정 팝업이 바로 떠요.")
 
     # ---- ③-B 행 직접 편집 ----
     with tab_direct:
@@ -397,7 +434,16 @@ def render_editor():
                         st.caption("🔤 " + note)
 
     # 결과 계산 (탭과 무관하게 세션 값 기준)
+    tokedits_all = st.session_state.get(f"{fhash}_tokedits", {})
+    def page_token_edits(p):
+        out = []
+        for (pp, ti), nv in tokedits_all.items():
+            if pp == p and nv != det[p]["latin"][ti]["text"]:
+                out.append({"box": det[p]["latin"][ti]["box"],
+                            "old": det[p]["latin"][ti]["text"], "new": nv})
+        return out
     new_texts, total_changed = [], 0
+    total_changed += sum(len(page_token_edits(p)) for p in range(len(det)))
     for p, d in enumerate(det):
         page_new = []
         for r, row in enumerate(d["rows"]):
@@ -421,14 +467,16 @@ def render_editor():
 
     if do_preview:
         with st.spinner("미리보기 생성 중…"):
-            st.session_state["preview"] = [engine.render_page(im, d["rows"], nt, dpi, preview=True, scale=d.get("scale"))[0]
-                                           for im, d, nt in zip(images, det, new_texts)]
+            st.session_state["preview"] = [engine.render_page(im, d["rows"], nt, dpi, preview=True, scale=d.get("scale"),
+                                                              token_edits=page_token_edits(pi))[0]
+                                           for pi, (im, d, nt) in enumerate(zip(images, det, new_texts))]
             st.session_state["result"] = None
     if do_apply:
         with st.spinner("가사를 다시 쓰는 중…"):
             outs, n = [], 0
-            for im, d, nt in zip(images, det, new_texts):
-                o, ch = engine.render_page(im, d["rows"], nt, dpi, scale=d.get("scale"))
+            for pi, (im, d, nt) in enumerate(zip(images, det, new_texts)):
+                o, ch = engine.render_page(im, d["rows"], nt, dpi, scale=d.get("scale"),
+                                           token_edits=page_token_edits(pi))
                 outs.append(o); n += len(ch)
             st.session_state["result"] = (outs, engine.to_pdf_bytes(outs, dpi), n)
             st.session_state["preview"] = None
