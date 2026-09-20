@@ -3,7 +3,7 @@ import hashlib, os
 import streamlit as st
 import engine
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 st.set_page_config(page_title="악보 가사 수정기", page_icon="🎼", layout="wide",
                    initial_sidebar_state="collapsed")

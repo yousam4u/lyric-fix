@@ -316,24 +316,44 @@ def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool
             continue
         font = _row_font(font_path, font_index, row["sylls"])
         if len(new) != len(old):
-            # 자유 편집: 행 전체를 지우고 새 텍스트를 다시 쓴다 (음표 비동기 행용 — 글자 수 변경 허용)
-            bx0 = min(b[0] for b in row["sylls"]); by0 = min(b[1] for b in row["sylls"])
-            bx1 = max(b[2] for b in row["sylls"]); by1 = max(b[3] for b in row["sylls"])
+            # 자유 편집(수술식): diff로 바뀐 구간만 처리 — 삭제해도 나머지 글자는 원본 위치·픽셀 그대로 유지
+            import difflib
+            sylls = row["sylls"]
+            pitch = float(np.median([b[2] - b[0] for b in sylls])) * 1.12
             changes.append((ri, -1, old, new))
-            if preview:
-                draw.rectangle([bx0 - m, by0 - m, bx1 + m, by1 + m],
-                               outline=(220, 30, 30), width=max(2, int(3 * s)))
-                f = ImageFont.truetype(font_path, max(10, int(22 * s)), index=font_index)
-                draw.text((bx0, by1 + 3 * s), new, fill=(220, 30, 30), font=f)
-            else:
-                draw.rectangle([bx0 - m, by0 - m, bx1 + m, by1 + m], fill=(255, 255, 255))
-                cy = (by0 + by1) / 2
-                x = float(bx0)
-                pitch = float(np.median([b[2] - b[0] for b in row["sylls"]])) * 1.12
-                for ch in new:
-                    b = font.getbbox(ch)
-                    draw.text((x - b[0], cy - (b[3] - b[1]) / 2 - b[1]), ch, fill=(0, 0, 0), font=font)
-                    x += max(b[2] - b[0], pitch * 0.6) + pitch * 0.12 if ch != " " else pitch * 0.6
+            for tag, a1, a2, b1, b2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+                if tag == "equal":
+                    continue
+                seg = new[b1:b2]
+                if a2 > a1:                       # 기존 글자 구간: 지우기(또는 미리보기 박스)
+                    ex0 = min(b[0] for b in sylls[a1:a2]); ey0 = min(b[1] for b in sylls[a1:a2])
+                    ex1 = max(b[2] for b in sylls[a1:a2]); ey1 = max(b[3] for b in sylls[a1:a2])
+                else:                              # 순수 삽입: 이웃 글자 사이 틈에 배치
+                    left = sylls[a1 - 1] if a1 > 0 else None
+                    right = sylls[a1] if a1 < len(sylls) else None
+                    ex0 = (left[2] + int(4 * s)) if left else (right[0] - len(seg) * pitch)
+                    ex1 = (right[0] - int(4 * s)) if right else (ex0 + len(seg) * pitch)
+                    ref = left or right
+                    ey0, ey1 = ref[1], ref[3]
+                cy = (ey0 + ey1) / 2
+                if preview:
+                    draw.rectangle([ex0 - m, ey0 - m, ex1 + m, ey1 + m],
+                                   outline=(220, 30, 30), width=max(2, int(3 * s)))
+                    if seg:
+                        f = ImageFont.truetype(font_path, max(10, int(22 * s)), index=font_index)
+                        draw.text((ex0, ey1 + 3 * s), seg, fill=(220, 30, 30), font=f)
+                    continue
+                if a2 > a1:
+                    draw.rectangle([ex0 - m, ey0 - m, ex1 + m, ey1 + m], fill=(255, 255, 255))
+                if seg:
+                    n_ = len(seg)
+                    span = ex1 - ex0
+                    step = span / n_ if span >= n_ * pitch * 0.55 else pitch
+                    for k, ch in enumerate(seg):
+                        b = font.getbbox(ch)
+                        cx = ex0 + step * (k + 0.5)
+                        draw.text((cx - (b[2] - b[0]) / 2 - b[0], cy - (b[3] - b[1]) / 2 - b[1]),
+                                  ch, fill=(0, 0, 0), font=font)
             continue
         for i, (o, n) in enumerate(zip(old, new)):
             if o == n:
