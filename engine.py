@@ -275,9 +275,29 @@ def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool
     m = int(2 * s)
     for ri, (row, new) in enumerate(zip(rows, new_texts)):
         old = row["text"]
-        if not row["ok"] or new == old or len(new) != len(old):
+        if not row["ok"] or new == old:
             continue
         font = _row_font(font_path, font_index, row["sylls"])
+        if len(new) != len(old):
+            # 자유 편집: 행 전체를 지우고 새 텍스트를 다시 쓴다 (음표 비동기 행용 — 글자 수 변경 허용)
+            bx0 = min(b[0] for b in row["sylls"]); by0 = min(b[1] for b in row["sylls"])
+            bx1 = max(b[2] for b in row["sylls"]); by1 = max(b[3] for b in row["sylls"])
+            changes.append((ri, -1, old, new))
+            if preview:
+                draw.rectangle([bx0 - m, by0 - m, bx1 + m, by1 + m],
+                               outline=(220, 30, 30), width=max(2, int(3 * s)))
+                f = ImageFont.truetype(font_path, max(10, int(22 * s)), index=font_index)
+                draw.text((bx0, by1 + 3 * s), new, fill=(220, 30, 30), font=f)
+            else:
+                draw.rectangle([bx0 - m, by0 - m, bx1 + m, by1 + m], fill=(255, 255, 255))
+                cy = (by0 + by1) / 2
+                x = float(bx0)
+                pitch = float(np.median([b[2] - b[0] for b in row["sylls"]])) * 1.12
+                for ch in new:
+                    b = font.getbbox(ch)
+                    draw.text((x - b[0], cy - (b[3] - b[1]) / 2 - b[1]), ch, fill=(0, 0, 0), font=font)
+                    x += max(b[2] - b[0], pitch * 0.6) + pitch * 0.12 if ch != " " else pitch * 0.6
+            continue
         for i, (o, n) in enumerate(zip(old, new)):
             if o == n:
                 continue

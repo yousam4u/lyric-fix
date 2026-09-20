@@ -3,7 +3,7 @@ import hashlib, os
 import streamlit as st
 import engine
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 st.set_page_config(page_title="악보 가사 수정기", page_icon="🎼", layout="wide",
                    initial_sidebar_state="collapsed")
@@ -136,7 +136,7 @@ AI 모델을 쓰지 않아서 **사용료·토큰이 전혀 들지 않아요.**
 
 ### 행 편집 요령 (③)
 - 칸의 글자는 **OCR이 읽은 그대로**예요. 띄어쓰기는 무시되니 붙여 써도 돼요.
-- 글자 수가 달라지면 빨간 경고가 뜨고 결과 버튼이 잠겨요. 원래 글자 수로 맞추면 풀려요.
+- 글자 수가 같으면 음절 단위 정밀 교체, 다르면 그 행 전체를 지우고 다시 쓰는 자유 편집이 돼요 (노란 안내 표시).
 - 각 칸 아래 `변경 상→산, 바→파`처럼 무엇이 바뀌는지 표시돼요.
 - 「원본으로 되돌리기」를 누르면 모든 칸이 인식 결과로 돌아가요.
 - **"편집할 수 없어요"** 라고 뜨는 행은 OCR이 음절 수를 잘못 센 경우예요. 사이드바 「고급」에서 dpi를 **400**으로 올리고 파일을 다시 올려보세요.
@@ -155,7 +155,7 @@ AI 모델을 쓰지 않아서 **사용료·토큰이 전혀 들지 않아요.**
 
 ### 자주 묻는 질문
 - **인식이 왜 오래 걸리나요?** 300dpi 이미지를 글자 단위로 읽어요. 파일당 한 번만 걸리고, 이후 편집·미리보기는 바로 돼요.
-- **글자를 추가하거나 빼고 싶어요.** 이 앱은 음절 수를 유지하는 교체만 해요. 글자 수가 달라지는 수정은 악보 프로그램(MuseScore 등)에서 하세요.
+- **글자를 추가하거나 빼고 싶어요.** 글자 수를 바꾸면 그 행은 '자유 편집'으로 전환돼 행 전체를 지우고 새로 써요. 음표와 짝이 맞아야 하는 가사 행에는 비추천(정렬 어긋남), 제목·자유 문구 수정에 적합해요.
 - **텍스트가 들어 있는 PDF인데요?** 스캔이 아니라 글자를 선택할 수 있는 PDF라면 PDF 편집기로 직접 고치는 게 더 깔끔해요.
 - **새 글자의 폰트가 조금 달라 보여요.** 원본 글자 높이·폭에 맞춰 Noto Sans(본고딕)로 그려요. 대부분의 악보 폰트와 거의 같지만 특수 폰트는 살짝 다를 수 있어요.
 - **여러 페이지도 되나요?** 네. 페이지마다 행이 따로 나오고, 결과도 한 PDF로 합쳐져요. 10페이지가 넘으면 느려질 수 있어요.
@@ -263,7 +263,7 @@ def render_editor():
 
     # ---------- ③ 행별 편집 ----------
     st.subheader("③ 가사 행 편집")
-    st.caption("인식된 글자 중 틀린 것만 고치세요. 글자 수가 달라지면 빨간 경고가 뜹니다.")
+    st.caption("인식된 글자 중 틀린 것만 고치세요. 글자 수를 바꾸면 그 행은 통째로 다시 쓰는 자유 편집이 됩니다.")
     new_texts, total_changed, has_error = [], 0, False
     for p, (im, d) in enumerate(zip(images, det)):
         st.markdown(f"**{p + 1}페이지**")
@@ -280,13 +280,15 @@ def render_editor():
                     page_new.append(row["text"]); continue
                 val = st.text_input(f"행 {r + 1}", key=key)
                 val = "".join(val.split())
-                if len(val) != len(row["text"]):
-                    st.error(f"음절 수 {len(val)} ≠ 원본 {len(row['text'])} — 글자 수는 같아야 해요")
-                    has_error = True
-                elif val != row["text"]:
-                    diffs = [f"{o}→{n}" for o, n in zip(row["text"], val) if o != n]
-                    total_changed += len(diffs)
-                    st.caption("변경 " + ", ".join(diffs))
+                if val != row["text"]:
+                    if len(val) != len(row["text"]):
+                        total_changed += 1
+                        st.warning(f"글자 수 변경({len(row['text'])}→{len(val)}) — 이 행 전체를 지우고 새로 써요. "
+                                   "음표에 붙은 가사라면 정렬이 어긋날 수 있어요 (제목·자유 문구에 적합)")
+                    else:
+                        diffs = [f"{o}→{n}" for o, n in zip(row["text"], val) if o != n]
+                        total_changed += len(diffs)
+                        st.caption("변경 " + ", ".join(diffs))
                 page_new.append(val)
             new_texts.append(page_new)
 
