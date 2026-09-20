@@ -53,7 +53,11 @@ st.markdown("""
   [data-testid="stExpander"] details{ background:var(--card); border:1px solid #E8EEFB;
         border-radius:20px; box-shadow:var(--shadow); overflow:hidden; }
   [data-testid="stAlert"]{ border-radius:18px; border:none; box-shadow:var(--shadow); }
-  div[data-testid="stDialog"] div[role="dialog"]{ border-radius:24px; }
+  div[data-testid="stDialog"] > div:first-child{ border-radius:24px;
+        max-width:min(540px, 92vw) !important; max-height:70vh; overflow-y:auto; }
+  @media (max-width:640px){
+    div[data-testid="stDialog"] > div:first-child{ max-height:78vh; }
+  }
 
   /* ── 버튼: 알약 ── */
   .stButton>button, .stDownloadButton>button, [data-testid="stCameraInput"] button{
@@ -268,7 +272,7 @@ def render_editor():
                "회색 = 인식 불완전(클릭 불가)")
 
     # 팝업(다이얼로그) 정의 ------------------------------------------------
-    @st.dialog("📋 일괄 규칙", width="large")
+    @st.dialog("📋 일괄 규칙")
     def rules_dialog():
         st.caption("클릭으로 쌓인 규칙을 직접 다듬거나, `원본=수정`·`원본=삭제`를 손으로 추가하세요. 한 줄에 하나, `#` 뒤는 주석.")
         ta_key = RK + "_ta"
@@ -281,13 +285,13 @@ def render_editor():
 
         def _sync_rules():
             st.session_state[RK] = st.session_state[ta_key]
-        st.text_area("규칙", value=st.session_state.get(RK, ""), height=260, key=ta_key,
+        st.text_area("규칙", value=st.session_state.get(RK, ""), height=160, key=ta_key,
                      on_change=_sync_rules, label_visibility="collapsed")
         st.caption("⚠️ 한 글자 규칙(`상=산`)은 다른 단어(세상→세산)까지 바꿔요. 반영은 아래 「✔ 수정완료 (미리보기)」에서 한꺼번에 돼요.")
         if st.button("닫기", use_container_width=True, key="rules_close"):
             st.session_state["open_dlg"] = None; st.rerun()
 
-    @st.dialog("⌨️ 행 전체 편집", width="large")
+    @st.dialog("⌨️ 행 전체 편집")
     def rows_dialog():
         st.caption("행을 통째로 고칠 때 사용하세요. 새 내용을 쓰고 ✔ 완료를 누르면 행 규칙이 규칙란에 추가돼요. 칸을 비우면 행 전체 삭제(위치 유지).")
         rl = parse_current_rules()
