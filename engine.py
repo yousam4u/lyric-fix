@@ -332,11 +332,14 @@ def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool
                 if a2 > a1:                       # 기존 글자 구간: 지우기(또는 미리보기 박스)
                     ex0 = min(b[0] for b in sylls[a1:a2]); ey0 = min(b[1] for b in sylls[a1:a2])
                     ex1 = max(b[2] for b in sylls[a1:a2]); ey1 = max(b[3] for b in sylls[a1:a2])
+                    er_x0 = ex0
                 else:                              # 순수 삽입: 이웃 글자 사이 틈에 배치
                     left = sylls[a1 - 1] if a1 > 0 else None
                     right = sylls[a1] if a1 < len(sylls) else None
                     ex0 = (left[2] + int(4 * s)) if left else (right[0] - len(seg) * pitch)
                     ex1 = (right[0] - int(4 * s)) if right else (ex0 + len(seg) * pitch)
+                    # 행 맨 앞 삽입이면 남은 깨진 잉크까지 넉넉히 지운다
+                    er_x0 = ex0 - pitch * 0.6 if left is None else ex0
                     ref = left or right
                     ey0, ey1 = ref[1], ref[3]
                 cy = (ey0 + ey1) / 2
@@ -347,8 +350,8 @@ def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool
                         f = ImageFont.truetype(font_path, max(10, int(22 * s)), index=font_index)
                         draw.text((ex0, ey1 + 3 * s), seg, fill=(220, 30, 30), font=f)
                     continue
-                if a2 > a1:
-                    draw.rectangle([ex0 - m, ey0 - m, ex1 + m, ey1 + m], fill=(255, 255, 255))
+                # 대상 구간 지우기 — 삽입일 때도 틈에 남은 깨진 글자 잉크를 함께 지운다
+                draw.rectangle([er_x0 - m, ey0 - m, ex1 + m, ey1 + m], fill=(255, 255, 255))
                 if seg:
                     n_ = len(seg)
                     span = ex1 - ex0
