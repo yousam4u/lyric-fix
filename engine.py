@@ -166,39 +166,6 @@ def _is_lyric_row(row, s):
     med_h = float(np.median([t["h"] for t in row]))
     return 36 * s <= med_h <= 58 * s
 
-def _latin_tokens(img: Image.Image, min_conf=55):
-    """영문/기호 토큰(제목 부제·작곡자·튜닝·코드 등). 순수 숫자는 제외."""
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
-        img.save(tf.name)
-        r = subprocess.run(["tesseract", tf.name, "stdout", "--psm", "6", "tsv"],
-                           capture_output=True, text=True)
-    os.unlink(tf.name)
-    lines = r.stdout.strip().split("\n")
-    if len(lines) < 2:
-        return []
-    header = lines[0].split("\t")
-    out = []
-    for ln in lines[1:]:
-        p = ln.split("\t")
-        if len(p) < 12:
-            continue
-        d = dict(zip(header, p))
-        txt = d.get("text", "").strip()
-        m = re.fullmatch(r"[A-Za-z][A-Za-z0-9#.'\-]*", txt)
-        if not m:
-            continue
-        try:
-            conf = float(d["conf"])
-        except ValueError:
-            continue
-        if conf < min_conf:
-            continue
-        l, t, w, h = int(d["left"]), int(d["top"]), int(d["width"]), int(d["height"])
-        if h < 8:
-            continue
-        out.append({"text": txt, "box": [l, t, l + w, t + h]})
-    return out
-
 # ---------------- 음절 기하 ----------------
 def _glyph_groups(gray, x0, y0, x1, y1, s):
     reg = (gray[y0:y1, x0:x1] < 128).astype(np.uint8)
@@ -268,8 +235,7 @@ def detect_page(img: Image.Image, dpi: int = DPI):
     # 글자 크기 스케일: 스캔/사진/해상도 무관하게 OCR 글자 높이 중앙값(≈47px@300dpi 기준)에서 자동 추정
     hs = [t["h"] for t in toks if len(t["text"]) >= 2]
     s = float(np.clip(np.median(hs) / 47.0, 0.5, 2.0)) if len(hs) >= 5 else dpi / 300.0
-    # 모든 한글 텍스트 행(2자 이상) — 가사 여부는 kind로 분류
-    rows = [r for r in _cluster_rows(toks, 25 * s) if sum(len(t["text"]) for t in r) >= 2]
+    rows = [r for r in _cluster_rows(toks, 25 * s) if _is_lyric_row(r, s)]
     rows.sort(key=lambda r: np.mean([t["cy"] for t in r]))
     out = []
     for row in rows:
@@ -284,11 +250,9 @@ def detect_page(img: Image.Image, dpi: int = DPI):
         groups = [g for g in groups if near(g)]
         sylls = _partition(groups, len(text), target_w)
         out.append({"y": int(np.mean([t["cy"] for t in row])), "text": text,
-                    "kind": "lyric" if _is_lyric_row(row, s) else "text",
-                    "tokens": [t["text"] for t in row],
                     "sylls": [[int(v) for v in b] for b in sylls] if sylls else None,
                     "ok": sylls is not None})
-    return {"rows": out, "scale": round(s, 3), "latin": _latin_tokens(img)}
+    return {"rows": out, "scale": round(s, 3)}
 
 # ---------------- 렌더 ----------------
 def _row_font(font_path, font_index, sylls):
@@ -301,8 +265,7 @@ def _row_font(font_path, font_index, sylls):
             return f
     return ImageFont.truetype(font_path, max(8, int(th * 0.8)), index=font_index)
 
-def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool = False, scale: float = None,
-                token_edits=None):
+def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool = False, scale: float = None):
     """rows: detect_page 결과의 rows. new_texts: 행별 수정 문자열(원본과 길이 동일). 바뀐 음절만 처리."""
     s = scale if scale else dpi / 300.0
     font_path, font_index = find_font()
@@ -312,49 +275,9 @@ def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool
     m = int(2 * s)
     for ri, (row, new) in enumerate(zip(rows, new_texts)):
         old = row["text"]
-        if not row["ok"] or new == old:
+        if not row["ok"] or new == old or len(new) != len(old):
             continue
         font = _row_font(font_path, font_index, row["sylls"])
-        if len(new) != len(old):
-            # 자유 편집(수술식): diff로 바뀐 구간만 처리 — 삭제해도 나머지 글자는 원본 위치·픽셀 그대로 유지
-            import difflib
-            sylls = row["sylls"]
-            pitch = float(np.median([b[2] - b[0] for b in sylls])) * 1.12
-            changes.append((ri, -1, old, new))
-            for tag, a1, a2, b1, b2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
-                if tag == "equal":
-                    continue
-                seg = new[b1:b2]
-                if a2 > a1:                       # 기존 글자 구간: 지우기(또는 미리보기 박스)
-                    ex0 = min(b[0] for b in sylls[a1:a2]); ey0 = min(b[1] for b in sylls[a1:a2])
-                    ex1 = max(b[2] for b in sylls[a1:a2]); ey1 = max(b[3] for b in sylls[a1:a2])
-                else:                              # 순수 삽입: 이웃 글자 사이 틈에 배치
-                    left = sylls[a1 - 1] if a1 > 0 else None
-                    right = sylls[a1] if a1 < len(sylls) else None
-                    ex0 = (left[2] + int(4 * s)) if left else (right[0] - len(seg) * pitch)
-                    ex1 = (right[0] - int(4 * s)) if right else (ex0 + len(seg) * pitch)
-                    ref = left or right
-                    ey0, ey1 = ref[1], ref[3]
-                cy = (ey0 + ey1) / 2
-                if preview:
-                    draw.rectangle([ex0 - m, ey0 - m, ex1 + m, ey1 + m],
-                                   outline=(220, 30, 30), width=max(2, int(3 * s)))
-                    if seg:
-                        f = ImageFont.truetype(font_path, max(10, int(22 * s)), index=font_index)
-                        draw.text((ex0, ey1 + 3 * s), seg, fill=(220, 30, 30), font=f)
-                    continue
-                if a2 > a1:
-                    draw.rectangle([ex0 - m, ey0 - m, ex1 + m, ey1 + m], fill=(255, 255, 255))
-                if seg:
-                    n_ = len(seg)
-                    span = ex1 - ex0
-                    step = span / n_ if span >= n_ * pitch * 0.55 else pitch
-                    for k, ch in enumerate(seg):
-                        b = font.getbbox(ch)
-                        cx = ex0 + step * (k + 0.5)
-                        draw.text((cx - (b[2] - b[0]) / 2 - b[0], cy - (b[3] - b[1]) / 2 - b[1]),
-                                  ch, fill=(0, 0, 0), font=font)
-            continue
         for i, (o, n) in enumerate(zip(old, new)):
             if o == n:
                 continue
@@ -369,112 +292,12 @@ def render_page(img: Image.Image, rows, new_texts, dpi: int = DPI, preview: bool
                 cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
                 b = font.getbbox(n)
                 draw.text((cx - (b[2] - b[0]) / 2 - b[0], cy - (b[3] - b[1]) / 2 - b[1]), n, fill=(0, 0, 0), font=font)
-    # 영문 토큰 교체 (자유 길이): 토큰 박스를 지우고 새 텍스트를 같은 높이로 그림
-    for te in (token_edits or []):
-        x0, y0, x1, y1 = te["box"]
-        changes.append((-1, -1, te["old"], te["new"]))
-        if preview:
-            draw.rectangle([x0 - m, y0 - m, x1 + m, y1 + m], outline=(220, 30, 30), width=max(2, int(3 * s)))
-            f = ImageFont.truetype(font_path, max(10, int(22 * s)), index=font_index)
-            draw.text((x0, y1 + 3 * s), te["new"], fill=(220, 30, 30), font=f)
-            continue
-        draw.rectangle([x0 - int(4 * s), y0 - int(4 * s), x1 + int(4 * s), y1 + int(4 * s)], fill=(255, 255, 255))
-        if te["new"]:
-            fh = y1 - y0
-            for sz in range(int(fh * 1.5), 7, -1):
-                f = ImageFont.truetype(font_path, sz, index=font_index)
-                b = f.getbbox("Ag한")
-                if (b[3] - b[1]) <= fh * 1.15:
-                    break
-            b = f.getbbox(te["new"])
-            draw.text((x0 - b[0], (y0 + y1) / 2 - (b[3] - b[1]) / 2 - b[1]), te["new"], fill=(0, 0, 0), font=f)
     return out, changes
 
 def to_pdf_bytes(images, dpi: int = DPI) -> bytes:
     buf = io.BytesIO()
     images[0].save(buf, "PDF", save_all=True, append_images=images[1:], resolution=float(dpi))
     return buf.getvalue()
-
-# ---------------- 맞춤법 제안 (hunspell-ko, 선택 기능) ----------------
-def spell_available() -> bool:
-    import shutil
-    if not shutil.which("hunspell"):
-        return False
-    for d in ("/usr/share/hunspell/ko_KR.dic", "/usr/share/hunspell/ko.dic"):
-        if os.path.exists(d):
-            return True
-    return False
-
-def _hunspell_check(words):
-    """words → {word: suggestions or None}. None=사전에 있음."""
-    uniq = list(dict.fromkeys(w for w in words if len(w) >= 2))
-    if not uniq:
-        return {}
-    inp = "\n".join("^" + w for w in uniq) + "\n"   # ^ = 파이프 명령 방지
-    r = subprocess.run(["hunspell", "-d", "ko_KR", "-i", "UTF-8", "-a"],
-                       input=inp, capture_output=True, text=True)
-    res, i = {}, 0
-    for ln in r.stdout.splitlines():
-        if not ln or ln.startswith("@"):
-            continue
-        if ln[0] in "*+-":
-            res[uniq[i]] = None; i += 1
-        elif ln[0] == "&":
-            head, sugs = ln.split(":", 1)
-            res[uniq[i]] = [x.strip() for x in sugs.split(",")]; i += 1
-        elif ln[0] == "#":
-            res[uniq[i]] = []; i += 1
-        if i >= len(uniq):
-            break
-    return res
-
-def row_words(row):
-    """음절 박스 간격으로 어절을 재구성 → [(word, start_idx)]"""
-    text, sylls = row["text"], row.get("sylls")
-    if not sylls or len(sylls) != len(text):
-        return []
-    pitch = float(np.median([b[2] - b[0] for b in sylls]))
-    words, start = [], 0
-    for i in range(1, len(text)):
-        if sylls[i][0] - sylls[i - 1][2] > 0.6 * pitch:   # 어절 경계
-            words.append((text[start:i], start)); start = i
-    words.append((text[start:], start))
-    return words
-
-def word_boxes(row):
-    """행의 어절 목록: [{"w", "i0", "i1", "box":[x0,y0,x1,y1]}] (i1은 exclusive)"""
-    out = []
-    text, sylls = row["text"], row.get("sylls")
-    if not row.get("ok") or not sylls or len(sylls) != len(text):
-        return out
-    for w, i0 in row_words(row):
-        i1 = i0 + len(w)
-        bs = sylls[i0:i1]
-        out.append({"w": w, "i0": i0, "i1": i1,
-                    "box": [min(b[0] for b in bs), min(b[1] for b in bs),
-                            max(b[2] for b in bs), max(b[3] for b in bs)]})
-    return out
-
-def suggest_page(rows):
-    """행별 표기 검사(베타). 사전에 없는 어절을 플래그하고 후보를 보여준다 — 자동 교체는 하지 않음.
-    반환: [{"notes": [str]}] (rows와 같은 길이)"""
-    per_row_words = [row_words(r) if r.get("ok") else [] for r in rows]
-    all_words = [w for ws in per_row_words for w, _ in ws if len(w) >= 2]
-    checked = _hunspell_check(all_words)
-    out = []
-    for ws in per_row_words:
-        notes = []
-        for w, _ in ws:
-            sugs = checked.get(w)
-            if not sugs:                       # 사전에 있음(None) 또는 후보 없음([])
-                continue
-            same = [x for x in sugs if " " not in x and len(x) == len(w)
-                    and sum(a != b for a, b in zip(x, w)) == 1]
-            if not same:                       # 한 글자 차이 후보가 없으면 표시 안 함 (노이즈 억제)
-                continue
-            notes.append(f"'{w}' 확인 필요 · 비슷한 말: {', '.join(same[:3])}")
-        out.append({"notes": notes})
-    return out
 
 def check_env():
     """앱 시작 시 의존 도구 점검 → 문제 목록(비어 있으면 OK)."""

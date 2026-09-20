@@ -2,5 +2,3 @@ tesseract-ocr
 tesseract-ocr-kor
 poppler-utils
 fonts-noto-cjk
-hunspell
-hunspell-ko
